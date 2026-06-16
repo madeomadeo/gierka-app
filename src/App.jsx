@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react"
 import { supabase } from "./supabase"
-import AuthModal from "./Auth"
+import AuthModal from "./auth"
 
 const MIASTA = ["Wszystkie", "Amsterdam", "Rotterdam", "Den Haag", "Utrecht", "Eindhoven", "Breda", "Tilburg", "Groningen"]
 const TYPY = ["5 vs 5", "7 vs 7", "11 vs 11", "Futsal"]
 const MAPS_KEY = "AIzaSyDMKuWySzTFoLVi4WE5J8gcC_65nVo6058"
-
 const cl = {
   green: "#16A34A", greenHover: "#15803D", greenLight: "#DCFCE7", greenMid: "#86EFAC",
   amber: "#D97706", amberLight: "#FEF3C7",
