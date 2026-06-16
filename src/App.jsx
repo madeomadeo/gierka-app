@@ -1,12 +1,14 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { supabase } from "./supabase"
 import AuthModal from "./auth"
 
 const MIASTA = ["Wszystkie", "Amsterdam", "Rotterdam", "Den Haag", "Utrecht", "Eindhoven", "Breda", "Tilburg", "Groningen"]
 const TYPY = ["5 vs 5", "7 vs 7", "11 vs 11", "Futsal"]
+const POZIOMY = ["Rekreacyjny", "Średniozaawansowany", "Zaawansowany"]
 const MAPS_KEY = "AIzaSyDMKuWySzTFoLVi4WE5J8gcC_65nVo6058"
+
 const cl = {
-  green: "#16A34A", greenHover: "#15803D", greenLight: "#DCFCE7", greenMid: "#86EFAC",
+  green: "#16A34A", greenLight: "#DCFCE7", greenDark: "#15803D",
   amber: "#D97706", amberLight: "#FEF3C7",
   red: "#DC2626", redLight: "#FEE2E2",
   bg: "#F9FAFB", card: "#FFFFFF",
@@ -15,17 +17,15 @@ const cl = {
 }
 
 const pill = (color, bg) => ({ display: "inline-block", padding: "2px 10px", borderRadius: 999, background: bg, color, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" })
-const field = { width: "100%", padding: "9px 13px", border: `1.5px solid ${cl.border}`, borderRadius: 10, fontSize: 13, color: cl.text, outline: "none", boxSizing: "border-box", background: cl.card, transition: "border .15s" }
+const field = { width: "100%", padding: "9px 13px", border: `1.5px solid ${cl.border}`, borderRadius: 10, fontSize: 13, color: cl.text, outline: "none", boxSizing: "border-box", background: cl.card }
 const fieldErr = { ...field, borderColor: cl.red }
-const btn = {
-  primary: { display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 20px", borderRadius: 999, border: "none", background: cl.green, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" },
-  danger: { padding: "7px 13px", borderRadius: 10, border: `1.5px solid ${cl.redLight}`, background: cl.redLight, color: cl.red, fontSize: 12, fontWeight: 600, cursor: "pointer" },
-}
+const btnPrimary = { display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 20px", borderRadius: 999, border: "none", background: cl.green, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }
+const btnDanger = { padding: "7px 13px", borderRadius: 10, border: `1.5px solid ${cl.redLight}`, background: cl.redLight, color: cl.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }
 
 const fmt = (dt) => dt ? new Date(dt).toLocaleDateString("pl-PL", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""
 const isToday = (dt) => dt && new Date(dt).toDateString() === new Date().toDateString()
-const isWeekend = (dt) => { if (!dt) return false; const d = new Date(dt), day = d.getDay(), diff = d - new Date(); return diff >= 0 && diff <= 7*86400000 && (day===6||day===0) }
-const isWeek = (dt) => { if (!dt) return false; const diff = new Date(dt) - new Date(); return diff >= 0 && diff <= 7*86400000 }
+const isWeekend = (dt) => { if (!dt) return false; const d = new Date(dt), day = d.getDay(), diff = d - new Date(); return diff >= 0 && diff <= 7 * 86400000 && (day === 6 || day === 0) }
+const isWeek = (dt) => { if (!dt) return false; const diff = new Date(dt) - new Date(); return diff >= 0 && diff <= 7 * 86400000 }
 
 function badgeInfo(g) {
   const free = g.miejsc_total - g.miejsc_zajete
@@ -40,14 +40,21 @@ function levelInfo(p) {
 }
 
 function Label({ children, required }) {
-  return <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: cl.sub, marginBottom: 5 }}>{children}{required && <span style={{ color: cl.red, marginLeft: 3 }}>*</span>}</label>
+  return <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: cl.sub, marginBottom: 5 }}>
+    {children}{required && <span style={{ color: cl.red, marginLeft: 3 }}>*</span>}
+  </label>
 }
 function FieldWrap({ label, required, error, children }) {
-  return <div style={{ marginBottom: 14 }}><Label required={required}>{label}</Label>{children}{error && <div style={{ fontSize: 11, color: cl.red, marginTop: 3 }}>⚠ {error}</div>}</div>
+  return <div style={{ marginBottom: 14 }}>
+    <Label required={required}>{label}</Label>
+    {children}
+    {error && <div style={{ fontSize: 11, color: cl.red, marginTop: 3 }}>⚠ {error}</div>}
+  </div>
 }
 function SectionHead({ icon, title }) {
   return <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0 6px", borderBottom: `1.5px solid ${cl.borderGreen}`, marginBottom: 14, marginTop: 6 }}>
-    <span style={{ fontSize: 15 }}>{icon}</span><span style={{ fontSize: 13, fontWeight: 700, color: cl.text }}>{title}</span>
+    <span style={{ fontSize: 15 }}>{icon}</span>
+    <span style={{ fontSize: 13, fontWeight: 700, color: cl.text }}>{title}</span>
   </div>
 }
 function FilterGroup({ label, children }) {
@@ -63,25 +70,118 @@ function Sel({ value, onChange, options }) {
   </select>
 }
 
+const emptyForm = { tytul: "", lokalizacja: "", miasto: "Amsterdam", data_czas: "", typ: "7 vs 7", wpisowe: 0, miejsc_total: 14, opis: "", poziom: "Rekreacyjny", whatsapp: "" }
+
+// Formularz jako osobny komponent POZA App — kluczowe dla uniknięcia re-renderów
+function GierkaForm({ initial, onSave, onClose, title, submitLabel }) {
+  const [form, setForm] = useState(initial)
+  const [errors, setErrors] = useState({})
+
+  function set(key, val) {
+    setForm(p => ({ ...p, [key]: val }))
+    setErrors(p => ({ ...p, [key]: undefined }))
+  }
+
+  function validate() {
+    const e = {}
+    if (!form.tytul.trim()) e.tytul = "Pole wymagane"
+    if (!form.lokalizacja.trim()) e.lokalizacja = "Pole wymagane"
+    if (!form.data_czas) e.data_czas = "Pole wymagane"
+    if (!form.whatsapp.trim()) e.whatsapp = "Pole wymagane"
+    if (!form.miejsc_total || form.miejsc_total < 2) e.miejsc_total = "Min. 2 graczy"
+    setErrors(e)
+    return !Object.keys(e).length
+  }
+
+  function handleSave() {
+    if (validate()) onSave(form)
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: cl.card, borderRadius: 20, padding: 28, width: "100%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.18)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 17, color: cl.text }}>{title}</div>
+            <div style={{ fontSize: 12, color: cl.muted, marginTop: 3 }}>Pola z <span style={{ color: cl.red }}>*</span> są obowiązkowe</div>
+          </div>
+          <button onClick={onClose} style={{ background: cl.greenLight, border: "none", borderRadius: "50%", width: 30, height: 30, fontSize: 17, cursor: "pointer", color: cl.green, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+        </div>
+
+        <SectionHead icon="⚽" title="Gierka" />
+        <FieldWrap label="Nazwa gierki" required error={errors.tytul}>
+          <input style={errors.tytul ? fieldErr : field} placeholder="np. Środowa piłka w Amsterdamie" value={form.tytul} onChange={e => set("tytul", e.target.value)} />
+        </FieldWrap>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FieldWrap label="Rodzaj gry" required>
+            <select style={field} value={form.typ} onChange={e => set("typ", e.target.value)}>
+              {TYPY.map(t => <option key={t}>{t}</option>)}
+            </select>
+          </FieldWrap>
+          <FieldWrap label="Poziom gry" required>
+            <select style={field} value={form.poziom} onChange={e => set("poziom", e.target.value)}>
+              {POZIOMY.map(p => <option key={p}>{p}</option>)}
+            </select>
+          </FieldWrap>
+        </div>
+
+        <SectionHead icon="📍" title="Boisko" />
+        <FieldWrap label="Adres boiska" required error={errors.lokalizacja}>
+          <input style={errors.lokalizacja ? fieldErr : field} placeholder="np. Sportpark Ookmeer" value={form.lokalizacja} onChange={e => set("lokalizacja", e.target.value)} />
+        </FieldWrap>
+        <FieldWrap label="Miasto" required>
+          <select style={field} value={form.miasto} onChange={e => set("miasto", e.target.value)}>
+            {MIASTA.filter(m => m !== "Wszystkie").map(m => <option key={m}>{m}</option>)}
+          </select>
+        </FieldWrap>
+
+        <SectionHead icon="🕐" title="Termin i gracze" />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <FieldWrap label="Data i godzina" required error={errors.data_czas}>
+            <input type="datetime-local" style={errors.data_czas ? fieldErr : field} value={form.data_czas} onChange={e => set("data_czas", e.target.value)} />
+          </FieldWrap>
+          <FieldWrap label="Liczba graczy" required error={errors.miejsc_total}>
+            <input type="number" min="4" max="22" style={errors.miejsc_total ? fieldErr : field} value={form.miejsc_total} onChange={e => set("miejsc_total", parseInt(e.target.value) || 10)} />
+          </FieldWrap>
+        </div>
+        <FieldWrap label="Wpisowe (€)">
+          <input type="number" min="0" placeholder="0 = gratis" style={field} value={form.wpisowe} onChange={e => set("wpisowe", parseInt(e.target.value) || 0)} />
+        </FieldWrap>
+
+        <SectionHead icon="📱" title="Kontakt" />
+        <FieldWrap label="Numer WhatsApp" required error={errors.whatsapp}>
+          <input style={errors.whatsapp ? fieldErr : field} placeholder="+31 6 12 34 56 78" value={form.whatsapp} onChange={e => set("whatsapp", e.target.value)} />
+        </FieldWrap>
+        <div style={{ fontSize: 11, color: cl.muted, marginTop: -10, marginBottom: 14 }}>Numer widoczny tylko dla zapisanych graczy</div>
+
+        <SectionHead icon="📝" title="Dodatkowe info" />
+        <FieldWrap label="Opis (opcjonalnie)">
+          <input style={field} placeholder="np. buty korki, szatnia dostępna" value={form.opis} onChange={e => set("opis", e.target.value)} />
+        </FieldWrap>
+
+        <button onClick={handleSave} style={{ ...btnPrimary, width: "100%", justifyContent: "center", padding: 13, fontSize: 14, borderRadius: 12, boxShadow: "0 4px 16px rgba(22,163,74,.3)", marginTop: 4 }}>
+          {submitLabel}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [gierki, setGierki] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
   const [showForm, setShowForm] = useState(false)
-  const [showAuth, setShowAuth] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
   const [user, setUser] = useState(null)
-  const [errors, setErrors] = useState({})
+  const [editInitial, setEditInitial] = useState(emptyForm)
 
   const [fMiasto, setFMiasto] = useState("Wszystkie")
   const [fKiedy, setFKiedy] = useState("Wszystkie")
   const [fWpisowe, setFWpisowe] = useState("Wszystkie")
   const [fPoziom, setFPoziom] = useState("Wszystkie")
   const [fWolne, setFWolne] = useState(false)
-
-  const emptyForm = { tytul: "", lokalizacja: "", miasto: "Amsterdam", data_czas: "", typ: "7 vs 7", wpisowe: 0, miejsc_total: 14, opis: "", poziom: "Rekreacyjny", whatsapp: "" }
-  const [form, setForm] = useState(emptyForm)
-  const [editForm, setEditForm] = useState(emptyForm)
 
   useEffect(() => {
     load()
@@ -100,25 +200,10 @@ export default function App() {
     setLoading(false)
   }
 
-  function setF(key, val) { setForm(p => ({ ...p, [key]: val })); setErrors(p => ({ ...p, [key]: undefined })) }
-  function setEF(key, val) { setEditForm(p => ({ ...p, [key]: val })) }
-
-  function validate(f) {
-    const e = {}
-    if (!f.tytul.trim()) e.tytul = "Pole wymagane"
-    if (!f.lokalizacja.trim()) e.lokalizacja = "Pole wymagane"
-    if (!f.data_czas) e.data_czas = "Pole wymagane"
-    if (!f.whatsapp.trim()) e.whatsapp = "Pole wymagane"
-    if (!f.miejsc_total || f.miejsc_total < 2) e.miejsc_total = "Min. 2 graczy"
-    setErrors(e)
-    return !Object.keys(e).length
-  }
-
-  async function dodaj() {
+  async function dodaj(form) {
     if (!user) { setShowAuth(true); return }
-    if (!validate(form)) return
     const { error } = await supabase.from("gierki").insert([{ ...form, kontakt: form.whatsapp, user_id: user.id }])
-    if (!error) { load(); setShowForm(false); setForm(emptyForm) }
+    if (!error) { load(); setShowForm(false) }
     else alert("Błąd: " + error.message)
   }
 
@@ -131,22 +216,21 @@ export default function App() {
     setSelected(p => p ? { ...p, miejsc_zajete: n } : p)
   }
 
-  async function usunGierke(id) {
+  async function usun(id) {
     if (!window.confirm("Czy na pewno chcesz usunąć tę gierkę?")) return
     await supabase.from("gierki").delete().eq("id", id)
     setSelected(null)
     load()
   }
 
-  async function zapiszEdycje() {
-    if (!validate(editForm)) return
-    const { error } = await supabase.from("gierki").update({ ...editForm, kontakt: editForm.whatsapp }).eq("id", selected.id)
+  async function edytuj(form) {
+    const { error } = await supabase.from("gierki").update({ ...form, kontakt: form.whatsapp }).eq("id", selected.id)
     if (!error) { load(); setShowEdit(false); setSelected(null) }
     else alert("Błąd: " + error.message)
   }
 
   function otworzEdycje(g) {
-    setEditForm({ tytul: g.tytul, lokalizacja: g.lokalizacja, miasto: g.miasto, data_czas: g.data_czas?.slice(0,16) || "", typ: g.typ, wpisowe: g.wpisowe, miejsc_total: g.miejsc_total, opis: g.opis || "", poziom: g.poziom || "Rekreacyjny", whatsapp: g.kontakt || "" })
+    setEditInitial({ tytul: g.tytul, lokalizacja: g.lokalizacja, miasto: g.miasto, data_czas: g.data_czas?.slice(0, 16) || "", typ: g.typ, wpisowe: g.wpisowe, miejsc_total: g.miejsc_total, opis: g.opis || "", poziom: g.poziom || "Rekreacyjny", whatsapp: g.kontakt || "" })
     setShowEdit(true)
   }
 
@@ -176,55 +260,6 @@ export default function App() {
 
   const isOwner = (g) => user && g.user_id === user.id
 
-  function FormBody({ f, setF, errs = {} }) {
-    return <>
-      <SectionHead icon="⚽" title="Gierka" />
-      <FieldWrap label="Nazwa gierki" required error={errs.tytul}>
-        <input style={errs.tytul ? fieldErr : field} placeholder="np. Środowa piłka w Amsterdamie" value={f.tytul} onChange={e => setF("tytul", e.target.value)} />
-      </FieldWrap>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <FieldWrap label="Rodzaj gry" required>
-          <select style={field} value={f.typ} onChange={e => setF("typ", e.target.value)}>{TYPY.map(t => <option key={t}>{t}</option>)}</select>
-        </FieldWrap>
-        <FieldWrap label="Poziom gry" required>
-          <select style={field} value={f.poziom} onChange={e => setF("poziom", e.target.value)}>
-            {["Rekreacyjny", "Średniozaawansowany", "Zaawansowany"].map(p => <option key={p}>{p}</option>)}
-          </select>
-        </FieldWrap>
-      </div>
-      <SectionHead icon="📍" title="Boisko" />
-      <FieldWrap label="Adres boiska" required error={errs.lokalizacja}>
-        <input style={errs.lokalizacja ? fieldErr : field} placeholder="np. Sportpark Ookmeer" value={f.lokalizacja} onChange={e => setF("lokalizacja", e.target.value)} />
-      </FieldWrap>
-      <FieldWrap label="Miasto" required>
-        <select style={field} value={f.miasto} onChange={e => setF("miasto", e.target.value)}>
-          {MIASTA.filter(m => m !== "Wszystkie").map(m => <option key={m}>{m}</option>)}
-        </select>
-      </FieldWrap>
-      <SectionHead icon="🕐" title="Termin i gracze" />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <FieldWrap label="Data i godzina" required error={errs.data_czas}>
-          <input type="datetime-local" style={errs.data_czas ? fieldErr : field} value={f.data_czas} onChange={e => setF("data_czas", e.target.value)} />
-        </FieldWrap>
-        <FieldWrap label="Liczba graczy" required error={errs.miejsc_total}>
-          <input type="number" min="4" max="22" style={errs.miejsc_total ? fieldErr : field} value={f.miejsc_total} onChange={e => setF("miejsc_total", parseInt(e.target.value) || 10)} />
-        </FieldWrap>
-      </div>
-      <FieldWrap label="Wpisowe (€)">
-        <input type="number" min="0" placeholder="0 = gratis" style={field} value={f.wpisowe} onChange={e => setF("wpisowe", parseInt(e.target.value) || 0)} />
-      </FieldWrap>
-      <SectionHead icon="📱" title="Kontakt" />
-      <FieldWrap label="Numer WhatsApp" required error={errs.whatsapp}>
-        <input style={errs.whatsapp ? fieldErr : field} placeholder="+31 6 12 34 56 78" value={f.whatsapp} onChange={e => setF("whatsapp", e.target.value)} />
-      </FieldWrap>
-      <div style={{ fontSize: 11, color: cl.muted, marginTop: -10, marginBottom: 14 }}>Numer widoczny tylko dla zapisanych graczy</div>
-      <SectionHead icon="📝" title="Dodatkowe info" />
-      <FieldWrap label="Opis (opcjonalnie)">
-        <input style={field} placeholder="np. buty korki, szatnia dostępna" value={f.opis} onChange={e => setF("opis", e.target.value)} />
-      </FieldWrap>
-    </>
-  }
-
   return (
     <div style={{ fontFamily: "'Segoe UI', system-ui, sans-serif", height: "100vh", display: "flex", flexDirection: "column", background: cl.bg }}>
 
@@ -235,7 +270,7 @@ export default function App() {
         </div>
         <span style={{ ...pill(cl.green, cl.greenLight), fontSize: 11 }}>⚽ znajdź mecz w Holandii</span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
-          <button onClick={() => setShowForm(true)} style={{ ...btn.primary, boxShadow: "0 2px 8px rgba(22,163,74,.3)" }}>＋ Dodaj gierkę</button>
+          <button onClick={() => setShowForm(true)} style={{ ...btnPrimary, boxShadow: "0 2px 8px rgba(22,163,74,.3)" }}>＋ Dodaj gierkę</button>
           {user ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 12, color: cl.muted, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email || user.user_metadata?.full_name}</div>
@@ -255,13 +290,17 @@ export default function App() {
         <FilterGroup label="📍 Miasto"><Sel value={fMiasto} onChange={v => { setFMiasto(v); setSelected(null) }} options={MIASTA} /></FilterGroup>
         <FilterGroup label="🕐 Kiedy"><Sel value={fKiedy} onChange={setFKiedy} options={["Wszystkie", "Dziś", "Weekend", "Ten tydzień"]} /></FilterGroup>
         <FilterGroup label="💶 Wpisowe"><Sel value={fWpisowe} onChange={setFWpisowe} options={["Wszystkie", "Gratis", "Płatne"]} /></FilterGroup>
-        <FilterGroup label="🎯 Poziom"><Sel value={fPoziom} onChange={setFPoziom} options={["Wszystkie", "Rekreacyjny", "Średniozaawansowany", "Zaawansowany"]} /></FilterGroup>
+        <FilterGroup label="🎯 Poziom"><Sel value={fPoziom} onChange={setFPoziom} options={["Wszystkie", ...POZIOMY]} /></FilterGroup>
         <FilterGroup label="✅ Wolne">
           <button onClick={() => setFWolne(!fWolne)} style={{ padding: "7px 13px", borderRadius: 10, border: `1.5px solid ${fWolne ? cl.green : cl.border}`, background: fWolne ? cl.greenLight : "white", color: fWolne ? cl.green : cl.muted, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
             {fWolne ? "✓ " : ""}Tylko wolne
           </button>
         </FilterGroup>
-        {activeF > 0 && <FilterGroup label="​"><button onClick={() => { setFMiasto("Wszystkie"); setFKiedy("Wszystkie"); setFWpisowe("Wszystkie"); setFPoziom("Wszystkie"); setFWolne(false) }} style={{ ...btn.danger }}>✕ Wyczyść</button></FilterGroup>}
+        {activeF > 0 && (
+          <FilterGroup label="​">
+            <button onClick={() => { setFMiasto("Wszystkie"); setFKiedy("Wszystkie"); setFWpisowe("Wszystkie"); setFPoziom("Wszystkie"); setFWolne(false) }} style={{ ...btnDanger }}>✕ Wyczyść</button>
+          </FilterGroup>
+        )}
       </div>
 
       {/* MAIN */}
@@ -334,7 +373,7 @@ export default function App() {
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   {isOwner(selected) && <>
                     <button onClick={() => otworzEdycje(selected)} style={{ padding: "6px 12px", borderRadius: 8, border: `1.5px solid ${cl.border}`, background: "white", color: cl.sub, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✏️ Edytuj</button>
-                    <button onClick={() => usunGierke(selected.id)} style={{ ...btn.danger, padding: "6px 12px" }}>🗑 Usuń</button>
+                    <button onClick={() => usun(selected.id)} style={{ ...btnDanger, padding: "6px 12px" }}>🗑 Usuń</button>
                   </>}
                   <button onClick={() => setSelected(null)} style={{ background: cl.greenLight, border: "none", borderRadius: "50%", width: 28, height: 28, fontSize: 17, cursor: "pointer", color: cl.green, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
                 </div>
@@ -347,14 +386,14 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              {(selected.kontakt || selected.whatsapp) && (
+              {selected.kontakt && (
                 <div style={{ background: "#F0FDF4", border: `1.5px solid ${cl.borderGreen}`, borderRadius: 10, padding: "9px 13px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ fontSize: 18 }}>📱</span>
                   <div>
                     <div style={{ fontSize: 10, fontWeight: 700, color: cl.muted, marginBottom: 2 }}>Kontakt z organizatorem</div>
-                    <a href={`https://wa.me/${(selected.kontakt || selected.whatsapp).replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
+                    <a href={`https://wa.me/${selected.kontakt.replace(/\D/g, "")}`} target="_blank" rel="noreferrer"
                       style={{ fontSize: 13, fontWeight: 700, color: cl.green, textDecoration: "none" }}>
-                      WhatsApp: {selected.kontakt || selected.whatsapp}
+                      WhatsApp: {selected.kontakt}
                     </a>
                   </div>
                 </div>
@@ -383,46 +422,9 @@ export default function App() {
         </div>
       </div>
 
-      {/* MODAL LOGOWANIA */}
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
-
-      {/* MODAL DODAJ */}
-      {showForm && (
-        <div onClick={() => setShowForm(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: cl.card, borderRadius: 20, padding: 28, width: "100%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.18)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-              <div>
-                <div style={{ fontWeight: 800, fontSize: 17, color: cl.text }}>Dodaj gierkę</div>
-                <div style={{ fontSize: 12, color: cl.muted, marginTop: 3 }}>Pola z <span style={{ color: cl.red }}>*</span> są obowiązkowe</div>
-              </div>
-              <button onClick={() => setShowForm(false)} style={{ background: cl.greenLight, border: "none", borderRadius: "50%", width: 30, height: 30, fontSize: 17, cursor: "pointer", color: cl.green, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-            </div>
-            <FormBody f={form} setF={setF} errs={errors} />
-            <button onClick={dodaj} style={{ ...btn.primary, width: "100%", justifyContent: "center", padding: 13, fontSize: 14, borderRadius: 12, boxShadow: "0 4px 16px rgba(22,163,74,.3)", marginTop: 4 }}>
-              ⚽ Opublikuj gierkę
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL EDYTUJ */}
-      {showEdit && (
-        <div onClick={() => setShowEdit(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: cl.card, borderRadius: 20, padding: 28, width: "100%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.18)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-              <div>
-                <div style={{ fontWeight: 800, fontSize: 17, color: cl.text }}>Edytuj gierkę</div>
-                <div style={{ fontSize: 12, color: cl.muted, marginTop: 3 }}>Zmień dane i zapisz</div>
-              </div>
-              <button onClick={() => setShowEdit(false)} style={{ background: cl.greenLight, border: "none", borderRadius: "50%", width: 30, height: 30, fontSize: 17, cursor: "pointer", color: cl.green, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-            </div>
-            <FormBody f={editForm} setF={setEF} errs={errors} />
-            <button onClick={zapiszEdycje} style={{ ...btn.primary, width: "100%", justifyContent: "center", padding: 13, fontSize: 14, borderRadius: 12, boxShadow: "0 4px 16px rgba(22,163,74,.3)", marginTop: 4 }}>
-              💾 Zapisz zmiany
-            </button>
-          </div>
-        </div>
-      )}
+      {showForm && <GierkaForm initial={emptyForm} onSave={dodaj} onClose={() => setShowForm(false)} title="Dodaj gierkę" submitLabel="⚽ Opublikuj gierkę" />}
+      {showEdit && <GierkaForm initial={editInitial} onSave={edytuj} onClose={() => setShowEdit(false)} title="Edytuj gierkę" submitLabel="💾 Zapisz zmiany" />}
     </div>
   )
 }
